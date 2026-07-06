@@ -1,6 +1,6 @@
 {
   "name": "scripto",
-  "version": "1.0.0",
+  "version": "1.0.15",
   "private": true,
   "main": "desktop/main.mjs",
   "iohook": {
@@ -22,6 +22,7 @@
     "lint": "node ./node_modules/eslint/bin/eslint.js src --ext .ts,.tsx",
     "typecheck": "node ./scripts/typecheck.mjs",
     "seed": "node ./backend/scripts/seed.mjs",
+    "fetch-whisper": "node ./backend/scripts/fetch-whisper.mjs",
     "migrate": "node ./node_modules/prisma/build/index.js migrate dev --schema backend/prisma/schema.prisma",
     "package": "node ./scripts/package-portable.mjs"
   },
