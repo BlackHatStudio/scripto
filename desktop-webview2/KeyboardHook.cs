@@ -60,6 +60,12 @@ internal sealed partial class KeyboardHook : IDisposable
         }
     }
 
+    public void Restart()
+    {
+        Dispose();
+        Start();
+    }
+
     private IntPtr HookProcedure(int nCode, IntPtr wParam, IntPtr lParam)
     {
         if (nCode >= 0)

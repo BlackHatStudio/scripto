@@ -1,7 +1,10 @@
 using System.Diagnostics;
+using System.Runtime.InteropServices;
 using System.Text.Json;
+using System.Threading.Channels;
 using Microsoft.Web.WebView2.Core;
 using Microsoft.Web.WebView2.WinForms;
+using Microsoft.Win32;
 
 namespace Scripto.Desktop;
 
@@ -21,6 +24,9 @@ internal sealed class MainForm : Form
     // that DO expose it send; Ctrl+Alt remains a guaranteed-working fallback.
     private const int VKeyFunction = 0xFF;
     private const int VKeySpace = 0x20;
+    private const int VKeyEscape = 0x1B;
+    private static readonly TimeSpan LockedListeningTimeout = TimeSpan.FromMinutes(5);
+    private static readonly TimeSpan HookStaleThreshold = TimeSpan.FromSeconds(10);
 
     private readonly WebView2 webView = new();
     private readonly KeyboardHook keyboardHook = new();
@@ -33,8 +39,14 @@ internal sealed class MainForm : Form
     private readonly string logPath = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Scripto", "logs", "desktop.log");
 
     private readonly System.Windows.Forms.Timer monitorTimer = new() { Interval = 150 };
+    private readonly System.Windows.Forms.Timer watchdogTimer = new() { Interval = 1000 };
     private IntPtr lastLoggedForeground = IntPtr.Zero;
     private bool lastLoggedIconic;
+    private DateTime lastHookEventAt = DateTime.UtcNow;
+    private DateTime? lockedListeningSince;
+
+    private readonly Channel<string> logChannel = Channel.CreateUnbounded<string>(
+        new UnboundedChannelOptions { SingleReader = true, SingleWriter = false });
 
     private IntPtr previousForegroundWindow = IntPtr.Zero;
     private string returnUrl = string.Empty;
@@ -49,6 +61,9 @@ internal sealed class MainForm : Form
     private bool swallowNextRelease;
     private DateTime chordStartedAt;
     private DateTime lastTriggerAt;
+    private readonly HashSet<int> swallowedKeys = new();
+    private int? altKeyCode;
+    private int? winKeyCode;
 
     public MainForm()
     {
@@ -75,9 +90,206 @@ internal sealed class MainForm : Form
 
         keyboardHook.KeyChanged += HandleKeyChanged;
         monitorTimer.Tick += (_, _) => PollWindowState();
+        watchdogTimer.Tick += (_, _) => RunWatchdog();
+        watchdogTimer.Start();
+
+        SystemEvents.SessionSwitch += HandleSessionSwitch;
+
+        _ = RunLogWriterAsync();
 
         Load += async (_, _) => await InitializeAsync();
         FormClosed += (_, _) => Cleanup();
+    }
+
+    private void HandleSessionSwitch(object? sender, SessionSwitchEventArgs e)
+    {
+        // The keyboard hook never sees key-up events that happen on the secure
+        // desktop (Ctrl+Alt+Del, UAC, the lock screen) - a chord started before
+        // one of those fires would otherwise stay "held" forever. Resync and, on
+        // resume, reinstall the hook in case Windows evicted it while we were
+        // locked out.
+        Log($"[session] switch reason={e.Reason}");
+        RequestResyncModifierState();
+
+        if (e.Reason is SessionSwitchReason.SessionUnlock or SessionSwitchReason.ConsoleConnect)
+        {
+            RequestReinstallHook();
+        }
+    }
+
+    private void RunWatchdog()
+    {
+        ResyncModifierState();
+
+        if (lockedListeningSince is DateTime since && DateTime.UtcNow - since > LockedListeningTimeout)
+        {
+            Log("Locked listening exceeded timeout - auto-stopping");
+            lockedListening = false;
+            lockedListeningSince = null;
+            swallowedKeys.Clear();
+            StopDictation();
+            trayIcon.BalloonTipTitle = "Scripto stopped listening";
+            trayIcon.BalloonTipText = "Hands-free dictation timed out after 5 minutes of inactivity.";
+            trayIcon.ShowBalloonTip(5000);
+        }
+
+        var idleInfo = new NativeMethods.LASTINPUTINFO { cbSize = (uint)Marshal.SizeOf<NativeMethods.LASTINPUTINFO>() };
+        if (NativeMethods.GetLastInputInfo(ref idleInfo))
+        {
+            var systemIdleFor = TimeSpan.FromMilliseconds(unchecked((uint)Environment.TickCount - idleInfo.dwTime));
+            if (systemIdleFor < HookStaleThreshold && DateTime.UtcNow - lastHookEventAt > HookStaleThreshold)
+            {
+                // The OS is seeing live keyboard input but our hook hasn't fired
+                // in a while - Windows silently evicted it (commonly because a
+                // prior callback blew the LowLevelHooksTimeout budget). Reinstall.
+                Log("Watchdog: hook appears stale while system reports active input - reinstalling");
+                ReinstallHook();
+            }
+        }
+    }
+
+    private void RequestResyncModifierState()
+    {
+        if (IsDisposed)
+        {
+            return;
+        }
+
+        if (InvokeRequired)
+        {
+            BeginInvoke(new Action(ResyncModifierState));
+            return;
+        }
+
+        ResyncModifierState();
+    }
+
+    private void ResyncModifierState()
+    {
+        var realCtrl = NativeMethods.IsKeyDown(VKeyLeftCtrl) || NativeMethods.IsKeyDown(VKeyRightCtrl);
+        var realAlt = NativeMethods.IsKeyDown(VKeyLeftAlt) || NativeMethods.IsKeyDown(VKeyRightAlt);
+        var realWin = NativeMethods.IsKeyDown(VKeyLeftWin) || NativeMethods.IsKeyDown(VKeyRightWin);
+
+        if (!chordActive && !ctrlDown && !altDown && !winDown)
+        {
+            return;
+        }
+
+        if (!realCtrl && !realAlt && !realWin && (ctrlDown || altDown || winDown || chordActive))
+        {
+            Log("Resync: no modifiers actually held but state disagreed - clearing stuck chord state");
+            ctrlDown = false;
+            altDown = false;
+            winDown = false;
+            fnDown = false;
+            altKeyCode = null;
+            winKeyCode = null;
+            swallowedKeys.Clear();
+
+            if (chordActive)
+            {
+                chordActive = false;
+                chordStartedAt = default;
+
+                if (lockedListening)
+                {
+                    lockedListening = false;
+                    lockedListeningSince = null;
+                }
+
+                if (chordTriggered)
+                {
+                    RequestStopDictation();
+                    chordTriggered = false;
+                }
+            }
+
+            return;
+        }
+
+        ctrlDown = realCtrl;
+        altDown = realAlt;
+        winDown = realWin;
+    }
+
+    private void RequestReinstallHook()
+    {
+        if (IsDisposed)
+        {
+            return;
+        }
+
+        if (InvokeRequired)
+        {
+            BeginInvoke(new Action(ReinstallHook));
+            return;
+        }
+
+        ReinstallHook();
+    }
+
+    private void ReinstallHook()
+    {
+        try
+        {
+            keyboardHook.Restart();
+            lastHookEventAt = DateTime.UtcNow;
+            Log("Keyboard hook reinstalled");
+        }
+        catch (Exception ex)
+        {
+            Log($"Keyboard hook reinstall failed: {ex}");
+        }
+    }
+
+    private void RequestForceReset()
+    {
+        if (IsDisposed)
+        {
+            return;
+        }
+
+        if (InvokeRequired)
+        {
+            BeginInvoke(new Action(ForceReset));
+            return;
+        }
+
+        ForceReset();
+    }
+
+    private void ForceReset()
+    {
+        Log("Force reset requested from tray menu");
+        ctrlDown = false;
+        altDown = false;
+        winDown = false;
+        fnDown = false;
+        chordActive = false;
+        chordTriggered = false;
+        swallowNextRelease = false;
+        lockedListening = false;
+        lockedListeningSince = null;
+        altKeyCode = null;
+        winKeyCode = null;
+        swallowedKeys.Clear();
+        StopDictation();
+        ReinstallHook();
+    }
+
+    private async Task RunLogWriterAsync()
+    {
+        await foreach (var line in logChannel.Reader.ReadAllAsync())
+        {
+            try
+            {
+                Directory.CreateDirectory(Path.GetDirectoryName(logPath)!);
+                await File.AppendAllTextAsync(logPath, line);
+            }
+            catch
+            {
+            }
+        }
     }
 
     private void PollWindowState()
@@ -97,6 +309,7 @@ internal sealed class MainForm : Form
         var menu = new ContextMenuStrip();
         menu.Items.Add("Open management", null, (_, _) => OpenManagementInBrowser());
         menu.Items.Add("Open dictation", null, (_, _) => RequestTriggerDictation());
+        menu.Items.Add("Stop listening / reset", null, (_, _) => RequestForceReset());
         menu.Items.Add(new ToolStripSeparator());
         menu.Items.Add("Quit", null, (_, _) => Close());
         return menu;
@@ -153,9 +366,24 @@ internal sealed class MainForm : Form
     private void HandleKeyChanged(object? sender, HookKeyEventArgs e)
     {
         var now = DateTime.UtcNow;
+        lastHookEventAt = now;
 
         if (e.EventType == KeyEventType.KeyDown)
         {
+            if (e.VirtualKeyCode == VKeyEscape && (chordTriggered || lockedListening))
+            {
+                // Bail out of an in-progress or locked dictation without pasting
+                // anything. This is the keyboard-only escape hatch for a wedged
+                // hands-free session when the chord itself won't clear it.
+                Log("Escape pressed during dictation - cancelling");
+                lockedListening = false;
+                lockedListeningSince = null;
+                swallowedKeys.Clear();
+                e.Handled = true;
+                RequestStopDictation();
+                return;
+            }
+
             if (e.VirtualKeyCode is VKeyLeftCtrl or VKeyRightCtrl)
             {
                 ctrlDown = true;
@@ -163,12 +391,27 @@ internal sealed class MainForm : Form
             else if (e.VirtualKeyCode is VKeyLeftAlt or VKeyRightAlt)
             {
                 altDown = true;
-                e.Handled = true;
+                altKeyCode = e.VirtualKeyCode;
+                // Only swallow Alt when it's plausibly forming our chord (Ctrl
+                // already down, or the chord is already active) - otherwise a
+                // bare Alt press must reach the OS normally (menu accelerators,
+                // Alt+Tab, Alt+F4), or Scripto breaks those system-wide any time
+                // it's running.
+                if (ctrlDown || chordActive)
+                {
+                    swallowedKeys.Add(e.VirtualKeyCode);
+                    e.Handled = true;
+                }
             }
             else if (e.VirtualKeyCode is VKeyLeftWin or VKeyRightWin)
             {
                 winDown = true;
-                e.Handled = true;
+                winKeyCode = e.VirtualKeyCode;
+                if (ctrlDown || chordActive)
+                {
+                    swallowedKeys.Add(e.VirtualKeyCode);
+                    e.Handled = true;
+                }
             }
             else if (e.VirtualKeyCode is VKeyFunction)
             {
@@ -184,8 +427,9 @@ internal sealed class MainForm : Form
                 // is behind our (hidden) form.
                 Log("Spacebar pressed while chord held - locking hands-free listening");
                 lockedListening = true;
+                lockedListeningSince = now;
                 e.Handled = true;
-                listeningPopup.ShowLocked();
+                RequestShowLockedPopup();
                 return;
             }
 
@@ -196,12 +440,27 @@ internal sealed class MainForm : Form
                     chordActive = true;
                     chordStartedAt = now;
 
+                    // The chord may have formed with Alt/Win pressed before Ctrl
+                    // (so its keydown already passed through un-swallowed). Catch
+                    // its release now so e.g. a bare Win keyup doesn't still pop
+                    // the Start menu after the chord fires.
+                    if (altDown && altKeyCode is int aKey)
+                    {
+                        swallowedKeys.Add(aKey);
+                    }
+
+                    if (winDown && winKeyCode is int wKey)
+                    {
+                        swallowedKeys.Add(wKey);
+                    }
+
                     if (lockedListening)
                     {
                         // This press stops and unlocks the hands-free session that a
                         // prior spacebar-lock started. Submit + paste like a normal finish.
                         Log("Chord pressed while locked - stopping and unlocking");
                         lockedListening = false;
+                        lockedListeningSince = null;
                         swallowNextRelease = true;
                         RequestStopDictation();
                     }
@@ -223,12 +482,20 @@ internal sealed class MainForm : Form
         else if (e.VirtualKeyCode is VKeyLeftAlt or VKeyRightAlt)
         {
             altDown = false;
-            e.Handled = true;
+            altKeyCode = null;
+            if (swallowedKeys.Remove(e.VirtualKeyCode))
+            {
+                e.Handled = true;
+            }
         }
         else if (e.VirtualKeyCode is VKeyLeftWin or VKeyRightWin)
         {
             winDown = false;
-            e.Handled = true;
+            winKeyCode = null;
+            if (swallowedKeys.Remove(e.VirtualKeyCode))
+            {
+                e.Handled = true;
+            }
         }
         else if (e.VirtualKeyCode is VKeyFunction)
         {
@@ -262,6 +529,28 @@ internal sealed class MainForm : Form
             RequestStopDictation();
             chordTriggered = false;
         }
+    }
+
+    private void RequestShowLockedPopup()
+    {
+        if (IsDisposed)
+        {
+            return;
+        }
+
+        if (InvokeRequired)
+        {
+            BeginInvoke(new Action(listeningPopup.ShowLocked));
+            return;
+        }
+
+        // Even though the keyboard hook fires on this same UI thread, route
+        // through BeginInvoke anyway: it posts the popup work to a later
+        // message-loop iteration instead of running it inline, so the hook
+        // procedure itself returns immediately and can't trip Windows'
+        // LowLevelHooksTimeout (default 300ms - blow it and the OS silently
+        // evicts the hook, or stalls system-wide input dispatch).
+        BeginInvoke(new Action(listeningPopup.ShowLocked));
     }
 
     private void TriggerDictation()
@@ -381,6 +670,8 @@ internal sealed class MainForm : Form
         dictationPendingStart = false;
         chordTriggered = false;
         chordActive = false;
+        lockedListening = false;
+        lockedListeningSince = null;
 
         if (e.ProcessFailedKind == CoreWebView2ProcessFailedKind.BrowserProcessExited)
         {
@@ -477,6 +768,8 @@ internal sealed class MainForm : Form
         dictationPendingStart = false;
         chordTriggered = false;
         chordActive = false;
+        lockedListening = false;
+        lockedListeningSince = null;
 
         if (string.IsNullOrWhiteSpace(text))
         {
@@ -484,7 +777,7 @@ internal sealed class MainForm : Form
             return;
         }
 
-        Clipboard.SetText(text);
+        SetClipboardTextWithRetry(text);
 
         Log($"Restoring foreground window 0x{previousForegroundWindow:X} (currently 0x{NativeMethods.GetForegroundWindow():X}, iconic={NativeMethods.IsIconic(previousForegroundWindow)})");
         if (previousForegroundWindow != IntPtr.Zero)
@@ -506,6 +799,35 @@ internal sealed class MainForm : Form
         monitorTimer.Stop();
     }
 
+    private void SetClipboardTextWithRetry(string text)
+    {
+        // The clipboard is a single system-wide lock - another app (a clipboard
+        // manager, an antivirus scanner) can be holding it for a few ms at the
+        // exact moment dictation completes. A bare SetText throws and silently
+        // drops the paste; a few short retries covers the common transient case.
+        for (var attempt = 1; attempt <= 5; attempt++)
+        {
+            try
+            {
+                Clipboard.SetText(text);
+                return;
+            }
+            catch (ExternalException ex)
+            {
+                Log($"Clipboard.SetText attempt {attempt} failed: {ex.Message}");
+                if (attempt == 5)
+                {
+                    trayIcon.BalloonTipTitle = "Scripto could not paste";
+                    trayIcon.BalloonTipText = "The clipboard was busy. Your dictated text was not copied.";
+                    trayIcon.ShowBalloonTip(5000);
+                    return;
+                }
+
+                Thread.Sleep(50);
+            }
+        }
+    }
+
     private void HandleDictationError(string? message)
     {
         Log($"HandleDictationError: {message}");
@@ -514,6 +836,8 @@ internal sealed class MainForm : Form
         dictationPendingStart = false;
         chordTriggered = false;
         chordActive = false;
+        lockedListening = false;
+        lockedListeningSince = null;
 
         if (!string.IsNullOrWhiteSpace(message))
         {
@@ -583,24 +907,25 @@ internal sealed class MainForm : Form
 
     private void Cleanup()
     {
+        SystemEvents.SessionSwitch -= HandleSessionSwitch;
         monitorTimer.Dispose();
+        watchdogTimer.Dispose();
         keyboardHook.Dispose();
         listeningPopup.Dispose();
         trayIcon.Visible = false;
         trayIcon.Dispose();
         brandIcon?.Dispose();
+        logChannel.Writer.TryComplete();
     }
 
     private void Log(string message)
     {
-        try
-        {
-            Directory.CreateDirectory(Path.GetDirectoryName(logPath)!);
-            File.AppendAllText(logPath, $"{DateTime.Now:yyyy-MM-dd HH:mm:ss.fff}  {message}{Environment.NewLine}");
-        }
-        catch
-        {
-        }
+        // Never touch disk from a caller that might be inside the keyboard
+        // hook's synchronous callback - queue the line and let the dedicated
+        // writer task (RunLogWriterAsync) flush it. A blocking File.AppendAllText
+        // here risks tripping Windows' LowLevelHooksTimeout, which stalls
+        // system-wide input dispatch or gets the hook silently evicted.
+        logChannel.Writer.TryWrite($"{DateTime.Now:yyyy-MM-dd HH:mm:ss.fff}  {message}{Environment.NewLine}");
     }
 
     private static Icon? LoadBrandIcon()

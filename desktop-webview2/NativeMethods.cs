@@ -25,6 +25,21 @@ internal static partial class NativeMethods
     internal static extern bool IsIconic(IntPtr hWnd);
 
     [DllImport("user32.dll")]
+    internal static extern short GetAsyncKeyState(int vKey);
+
+    internal static bool IsKeyDown(int vKey) => (GetAsyncKeyState(vKey) & 0x8000) != 0;
+
+    [DllImport("user32.dll")]
+    internal static extern bool GetLastInputInfo(ref LASTINPUTINFO plii);
+
+    [StructLayout(LayoutKind.Sequential)]
+    internal struct LASTINPUTINFO
+    {
+        public uint cbSize;
+        public uint dwTime;
+    }
+
+    [DllImport("user32.dll")]
     internal static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint lpdwProcessId);
 
     [DllImport("kernel32.dll")]

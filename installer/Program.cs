@@ -81,6 +81,7 @@ static int RunInstall(bool silent)
 
     if (!isSameDir)
     {
+        if (Directory.Exists(installDir)) StopExistingInstance(installDir);
         try { CopyWithProgress(sourceDir, installDir); }
         catch (Exception ex) { WriteError($"Failed to copy files: {ex.Message}"); return 1; }
     }
@@ -304,6 +305,27 @@ static void PrintBanner()
     Console.WriteLine();
 }
 
+static void StopExistingInstance(string installDir)
+{
+    string stopScript = Path.Combine(installDir, "Stop-Scripto.ps1");
+    if (!File.Exists(stopScript)) return;
+
+    Console.WriteLine("  Stopping running Scripto processes before upgrade...");
+    try
+    {
+        var psi = new ProcessStartInfo("powershell",
+            $"-NonInteractive -NoProfile -ExecutionPolicy Bypass -File \"{stopScript}\"")
+        {
+            UseShellExecute = false,
+            CreateNoWindow = true,
+            WindowStyle = ProcessWindowStyle.Hidden,
+        };
+        using var proc = Process.Start(psi);
+        proc?.WaitForExit(15000);
+    }
+    catch { /* best effort - if nothing was running, the copy below will succeed anyway */ }
+}
+
 static void CopyWithProgress(string src, string dst)
 {
     // Only skip copying install.exe over itself when running in-place (repair mode).
@@ -379,7 +401,7 @@ static void WriteColor(ConsoleColor color, string msg)
 static class K
 {
     public const string AppName = "Scripto";
-    public const string AppVersion = "1.0.13";
+    public const string AppVersion = "1.0.15";
     public const string Publisher = "Elevated Dynamics";
     public const string RegPath = @"SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\Scripto";
 }
