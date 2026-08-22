@@ -12,9 +12,24 @@ import type { TranscriptionProvider } from "../pipeline"
 // with MediaRecorder and posts it as base64 (see src/app/dictation/page.tsx); this provider
 // decodes it, transcodes to the 16kHz mono WAV whisper.cpp expects, and shells out to the
 // prebuilt `whisper-cli` binary rather than compiling whisper.cpp at install time.
+let loggedUnavailableReason = false
+
 export class LocalWhisperProvider implements TranscriptionProvider {
   static isAvailable(): boolean {
-    return fs.existsSync(config.whisperBinaryPath) && fs.existsSync(config.whisperModelPath)
+    const binaryExists = fs.existsSync(config.whisperBinaryPath)
+    const modelExists = fs.existsSync(config.whisperModelPath)
+    if ((!binaryExists || !modelExists) && !loggedUnavailableReason) {
+      // Runs once per process so a bad deploy (e.g. antivirus quarantining the
+      // unsigned whisper-cli.exe/DLLs during extraction) shows up in backend.log
+      // instead of silently falling back to cloud speech recognition.
+      loggedUnavailableReason = true
+      console.warn(
+        "[local-whisper] unavailable - dictation will fall back to cloud speech recognition.",
+        `binary (${config.whisperBinaryPath}): ${binaryExists ? "found" : "MISSING"}`,
+        `model (${config.whisperModelPath}): ${modelExists ? "found" : "MISSING"}`
+      )
+    }
+    return binaryExists && modelExists
   }
 
   async transcribe(input: { audioBase64?: string; mimeType?: string; mockTranscript?: string; locale?: string }) {

@@ -401,7 +401,7 @@ static void WriteColor(ConsoleColor color, string msg)
 static class K
 {
     public const string AppName = "Scripto";
-    public const string AppVersion = "1.0.16";
+    public const string AppVersion = "1.0.17";
     public const string Publisher = "Elevated Dynamics";
     public const string RegPath = @"SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\Scripto";
 }
