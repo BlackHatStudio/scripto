@@ -127,10 +127,6 @@ function DictationPageShell() {
   }, [desktopMode, result])
 
   useEffect(() => {
-    const postDesktopMessage = (message: Record<string, unknown>) => {
-      window.chrome?.webview?.postMessage(message)
-    }
-
     const onWebViewMessage = (event: MessageEvent) => {
       if (event.data?.type === "startRecording") {
         void startRecordingRef.current()
@@ -143,9 +139,19 @@ function DictationPageShell() {
     }
 
     window.chrome?.webview?.addEventListener("message", onWebViewMessage)
-    postDesktopMessage({ type: "dictationReady" })
     return () => window.chrome?.webview?.removeEventListener("message", onWebViewMessage)
   }, [])
+
+  useEffect(() => {
+    // Wait for the local-transcription capability check to resolve before telling the
+    // desktop host we're ready. Otherwise a chord press that lands right on navigation
+    // races the async /speech/capabilities fetch: the host replies with startRecording
+    // almost immediately, startRecording() reads localTranscriptionAvailable while it's
+    // still its initial null (falsy), and dictation wrongly falls back to the cloud Web
+    // Speech API even when local whisper is available and would have worked.
+    if (localTranscriptionAvailable === null) return
+    window.chrome?.webview?.postMessage({ type: "dictationReady" })
+  }, [localTranscriptionAvailable])
 
   async function startRecording() {
     if (recording || transcribing || speechRecognitionRef.current || mediaRecorderRef.current) return
