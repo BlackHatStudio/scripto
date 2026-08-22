@@ -100,7 +100,7 @@ static int RunInstall(bool silent)
             $"JWT_ACCESS_SECRET={GenerateSecret()}",
             $"JWT_REFRESH_SECRET={GenerateSecret()}",
             "DEV_EMAIL_VERIFICATION_BYPASS=false",
-            "TRANSCRIPTION_PROVIDER=mock",
+            "TRANSCRIPTION_PROVIDER=local-whisper",
             "NODE_ENV=production",
             ""
         }, System.Text.Encoding.UTF8);
@@ -401,7 +401,7 @@ static void WriteColor(ConsoleColor color, string msg)
 static class K
 {
     public const string AppName = "Scripto";
-    public const string AppVersion = "1.0.15";
+    public const string AppVersion = "1.0.16";
     public const string Publisher = "Elevated Dynamics";
     public const string RegPath = @"SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\Scripto";
 }

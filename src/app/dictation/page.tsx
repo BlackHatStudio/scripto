@@ -314,7 +314,9 @@ function DictationPageShell() {
         ? "Microphone access was denied."
         : event.error === "no-speech"
           ? "No speech was detected from the microphone."
-        : event.message || "Unable to access microphone speech recognition"
+        : event.message
+          ? `${event.message} (${event.error})`
+          : `Unable to access microphone speech recognition (${event.error || "unknown error"})`
       setError(message)
       setMicrophoneStatus(null)
       setRecording(false)
