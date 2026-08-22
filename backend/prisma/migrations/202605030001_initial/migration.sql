@@ -1,0 +1,2 @@
+-- Initial SpeechFlow schema migration placeholder.
+-- Run `prisma migrate dev` against a local PostgreSQL instance to generate the concrete SQL from schema.prisma.

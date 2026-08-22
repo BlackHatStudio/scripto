@@ -1,0 +1,5 @@
+{
+  "name": "electron-smoke",
+  "private": true,
+  "main": "main.mjs"
+}

@@ -1,0 +1,256 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id             String      @id @default(cuid())
+  email          String      @unique
+  displayName    String
+  passwordHash   String
+  emailVerified  Boolean     @default(false)
+  active         Boolean     @default(true)
+  activeTenantId String?
+  createdAt      DateTime    @default(now())
+  updatedAt      DateTime    @updatedAt
+  memberships    Membership[]
+  oauthIdentities OAuthIdentity[]
+  refreshSessions RefreshSession[]
+  speechHistory  SpeechHistory[]
+  devices        Device[]
+}
+
+model Tenant {
+  id           String      @id @default(cuid())
+  name         String
+  slug         String      @unique
+  ownerUserId  String
+  deletedAt    DateTime?
+  createdAt    DateTime    @default(now())
+  updatedAt    DateTime    @updatedAt
+  settings     TenantSettings?
+  memberships  Membership[]
+  categories   DictionaryCategory[]
+  terms        DictionaryTerm[]
+  rules        ReplacementRule[]
+  templates    PhraseTemplate[]
+  functions    VoiceFunction[]
+  emailProfiles EmailProfile[]
+  signatures   EmailSignature[]
+  speechHistory SpeechHistory[]
+  auditLogs    AuditLog[]
+  devices      Device[]
+}
+
+model TenantSettings {
+  id                      String   @id @default(cuid())
+  tenantId                String   @unique
+  historyRetentionDays    Int      @default(30)
+  audioRetentionEnabled   Boolean  @default(false)
+  dictionarySharingEnabled Boolean @default(true)
+  defaultCorrectionBehavior String
+  tenant                  Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+}
+
+model Membership {
+  id        String   @id @default(cuid())
+  userId    String
+  tenantId  String
+  role      String
+  active    Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  tenant    Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  @@unique([userId, tenantId])
+}
+
+model OAuthIdentity {
+  id              String   @id @default(cuid())
+  userId          String
+  provider        String
+  providerUserId  String
+  createdAt       DateTime @default(now())
+  user            User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  @@unique([provider, providerUserId])
+}
+
+model RefreshSession {
+  id         String   @id @default(cuid())
+  userId     String
+  tenantId   String?
+  deviceId   String
+  tokenHash  String
+  userAgent  String?
+  ipAddress  String?
+  expiresAt  DateTime
+  revokedAt  DateTime?
+  createdAt  DateTime @default(now())
+  user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+model DictionaryCategory {
+  id        String   @id @default(cuid())
+  tenantId  String?
+  name      String
+  scope     String
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  deletedAt DateTime?
+  tenant    Tenant?  @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+}
+
+model DictionaryTerm {
+  id           String   @id @default(cuid())
+  tenantId     String?
+  ownerUserId  String?
+  categoryId   String?
+  scope        String
+  correctText  String
+  spokenForm   String
+  phoneticHint String
+  caseSensitive Boolean @default(false)
+  enabled      Boolean  @default(true)
+  notes        String
+  version      Int      @default(1)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+  deletedAt    DateTime?
+  tenant       Tenant?  @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+}
+
+model ReplacementRule {
+  id           String   @id @default(cuid())
+  tenantId     String?
+  ownerUserId  String?
+  scope        String
+  ruleType     String
+  triggerText  String
+  replacementText String
+  priority     Int      @default(50)
+  enabled      Boolean  @default(true)
+  caseSensitive Boolean @default(false)
+  safeRegex    Boolean  @default(false)
+  notes        String
+  version      Int      @default(1)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+  deletedAt    DateTime?
+  tenant       Tenant?  @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+}
+
+model PhraseTemplate {
+  id           String   @id @default(cuid())
+  tenantId     String?
+  ownerUserId  String?
+  scope        String
+  spokenPhrase String
+  outputText   String
+  variables    Json
+  enabled      Boolean  @default(true)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+  deletedAt    DateTime?
+  tenant       Tenant?  @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+}
+
+model VoiceFunction {
+  id           String   @id @default(cuid())
+  tenantId     String?
+  ownerUserId  String?
+  scope        String
+  functionName String
+  description  String
+  functionType String
+  triggerPhrases Json
+  instruction  String
+  outputFormat String
+  priority     Int      @default(50)
+  enabled      Boolean  @default(true)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+  deletedAt    DateTime?
+  tenant       Tenant?  @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+}
+
+model EmailProfile {
+  id              String   @id @default(cuid())
+  tenantId        String?
+  ownerUserId     String?
+  scope           String
+  profileName     String
+  fromDisplayName String
+  fromEmail       String
+  defaultGreeting String
+  defaultClosing  String
+  tonePreference  String
+  enabled         Boolean  @default(true)
+  signatureId     String?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+  deletedAt       DateTime?
+  tenant          Tenant?  @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+}
+
+model EmailSignature {
+  id           String   @id @default(cuid())
+  tenantId     String?
+  profileId    String?
+  html         String
+  plainText    String
+  sanitizedHtml String
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+  deletedAt    DateTime?
+  tenant       Tenant?  @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+}
+
+model SpeechHistory {
+  id               String   @id @default(cuid())
+  tenantId         String
+  userId           String
+  mode             String
+  detectedCommand  String?
+  functionApplied  String
+  rawTranscript    String
+  correctedOutput  String
+  correctionsApplied Json
+  confidenceScore  Float
+  status           String
+  saved            Boolean  @default(true)
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+  user             User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  tenant           Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+}
+
+model AuditLog {
+  id         String   @id @default(cuid())
+  tenantId   String?
+  actorUserId String?
+  action     String
+  entityType String
+  entityId   String?
+  metadata   Json
+  createdAt  DateTime @default(now())
+  tenant     Tenant?  @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+}
+
+model Device {
+  id             String   @id @default(cuid())
+  tenantId       String?
+  userId         String
+  name           String
+  platform       String
+  dictionaryVersion Int   @default(1)
+  lastSeenAt     DateTime
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+  revokedAt      DateTime?
+  user           User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  tenant         Tenant?  @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+}

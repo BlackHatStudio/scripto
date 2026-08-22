@@ -1,273 +1,110 @@
-# Base Template
+# Scripto App Desktop
 
-A Next.js + Express + Tailwind v4 project template with DataTable components, theme toggling, and authentication boilerplate.
+Scripto App Desktop is the local Windows desktop application for dictation capture, speech correction, local dictionary behavior, and cloud PostgreSQL sync.
 
-## 🚀 Quick Start
+It is designed to run first from local memory and local storage, then sync durable records to PostgreSQL when available. The desktop app also supports tray-based operation, optional Windows auto-start, and ZIP-delivered installer or updater packaging.
 
-### Prerequisites
+## Current Layout
 
-- Node.js 20+ 
-- npm 10+
+- [src/](C:\DevSolutions\scripto\src) - Next.js UI, shared client helpers, and renderer-facing components
+- [backend/](C:\DevSolutions\scripto\backend) - Express API, in-memory/local persistence boundaries, and Prisma schema
+- [desktop/](C:\DevSolutions\scripto\desktop) - Electron desktop shell
+- [desktop-webview2/](C:\DevSolutions\scripto\desktop-webview2) - Windows WebView2 desktop host path
+- [scripts/](C:\DevSolutions\scripto\scripts) - Local startup and orchestration scripts
+- [AGENTS.md](C:\DevSolutions\scripto\AGENTS.md) - Desktop app guidance for future Codex work
 
-### Installation
+## Setup
+
+1. Install dependencies
 
 ```bash
-# Install root dependencies
 npm install
-
-# Install backend dependencies
-cd backend && npm install && cd ..
 ```
 
-### Development
+2. Copy environment files
 
 ```bash
-# Start Next.js dev server (from root)
+copy .env.example .env
+copy backend\.env.example backend\.env
+```
+
+3. Configure the backend environment
+
+- `DATABASE_URL` for local PostgreSQL or a cloud Postgres target
+- `JWT_ACCESS_SECRET`
+- `JWT_REFRESH_SECRET`
+- `CORS_ORIGINS`
+- `TRANSCRIPTION_PROVIDER=mock` for local testing
+
+Do not commit secrets or environment-specific values.
+
+## Local Runtime
+
+The current local stack is:
+
+- Frontend: `http://localhost:4444`
+- Backend API: `http://localhost:4445`
+- Desktop shell: Electron launches the same local app and connects to the API
+
+Start the pieces individually:
+
+```bash
+npm run dev:web
+npm run dev:api
+npm run desktop
+```
+
+Or start the combined local flow:
+
+```bash
 npm run dev
-
-# Start Express server (in another terminal)
-npm run server:dev
 ```
 
-The Next.js app will be available at `http://localhost:3000` and the Express server at `http://localhost:4000`.
+## Architecture Notes
 
-## 📁 Project Structure
+- Keep desktop-specific behavior in the desktop shell layer.
+- Keep correction and dictionary logic deterministic and testable.
+- Keep all durable database access behind backend service boundaries.
+- Prefer local memory and local persistent storage first for correction behavior.
+- Sync durable records to PostgreSQL with explicit conflict handling.
+- Preserve `.env` and local storage artifacts during installer or updater operations.
 
-```
-.
-├── src/                          # Next.js App Router
-│   ├── app/
-│   │   ├── layout.tsx           # Root layout with theme support
-│   │   ├── globals.css          # Tailwind v4 + TweakCN palette + p9 table styles
-│   │   └── page.tsx             # Sample page (DataTable + Button)
-│   ├── components/
-│   │   ├── ui/                  # shadcn-style primitives
-│   │   │   ├── button.tsx
-│   │   │   ├── table.tsx
-│   │   │   ├── input.tsx
-│   │   │   ├── dropdown-menu.tsx
-│   │   │   ├── select.tsx
-│   │   │   └── separator.tsx
-│   │   └── tables/             # DataTable components
-│   │       ├── data-table.tsx
-│   │       ├── data-table-pagination.tsx
-│   │       ├── data-table-view-options.tsx
-│   │       └── data-table-column-header.tsx
-│   └── lib/
-│       └── utils.ts             # cn helper
-├── backend/                     # Express + TypeScript backend
-│   ├── src/
-│   │   └── index.ts             # Express bootstrap + auth endpoints
-│   ├── package.json
-│   └── tsconfig.json
-├── components.json               # shadcn conventions
-├── next.config.ts
-├── tailwind.config.ts
-├── postcss.config.mjs
-├── tsconfig.json
-└── package.json                  # Monorepo root
-```
+## Environment Files
 
-## 🎨 Theme Toggling
+Root:
 
-The template supports multiple theme modes via HTML class toggles. Modify the `className` prop on the `<html>` tag in `src/app/layout.tsx`:
+- `NEXT_PUBLIC_API_BASE_URL`
+- `NEXT_PUBLIC_APP_NAME`
 
-- `""` (default) - Light theme
-- `"dark"` - Dark theme
-- `"turnaround"` - Turnaround theme (light)
-- `"turnaround dark"` - Turnaround theme (dark)
+Backend:
 
-### Example Theme Toggle Component
+- `PORT`
+- `DATABASE_URL`
+- `CORS_ORIGINS`
+- `JWT_ACCESS_SECRET`
+- `JWT_REFRESH_SECRET`
+- `DEV_EMAIL_VERIFICATION_BYPASS`
+- `TRANSCRIPTION_PROVIDER`
 
-You can create a client component to toggle themes dynamically:
+## Validation
 
-```tsx
-"use client";
-
-import { useEffect, useState } from "react";
-
-export function ThemeToggle() {
-  const [theme, setTheme] = useState("");
-
-  useEffect(() => {
-    const root = document.documentElement;
-    root.className = theme;
-  }, [theme]);
-
-  return (
-    <div className="flex gap-2">
-      <button onClick={() => setTheme("")}>Light</button>
-      <button onClick={() => setTheme("dark")}>Dark</button>
-      <button onClick={() => setTheme("turnaround")}>Turnaround</button>
-      <button onClick={() => setTheme("turnaround dark")}>Turnaround Dark</button>
-    </div>
-  );
-}
-```
-
-## 🎯 Key Features
-
-### UI Components
-
-- **Button** - Multiple variants (default, secondary, destructive, outline, ghost, link) and sizes
-- **Table** - Full table component with header, body, footer, and caption
-- **Input** - Styled input with focus states and validation support
-- **Dropdown Menu** - Radix UI dropdown with checkbox and radio items
-- **Select** - Radix UI select component
-- **Separator** - Horizontal and vertical separators
-
-### DataTable
-
-The DataTable component includes:
-- Sorting on columns
-- Column filtering/search
-- Column visibility toggle
-- Pagination with customizable page sizes
-- Row click handlers
-- Custom row styling
-- Loading states support
-
-### Server
-
-Express server includes:
-- Health check endpoint (`GET /health`)
-- JWT authentication boilerplate (`POST /auth/login`)
-- Protected route example (`GET /api/protected`)
-- CORS configuration
-- Cookie parser middleware
-
-## 📝 Configuration
-
-### Environment Variables
-
-Create a `.env` file in the `backend/` directory:
-
-```env
-PORT=4000
-JWT_SECRET=your-secret-key-here
-```
-
-### Tailwind Configuration
-
-The template uses Tailwind v4 with:
-- CSS variables for theming (TweakCN compatible)
-- Dark mode via class toggle
-- Custom p9 table styles
-- DataTable zebra striping support
-
-### Components Configuration
-
-The `components.json` file follows shadcn/ui conventions:
-- Style: default
-- RSC: true (React Server Components)
-- CSS variables: enabled
-- Base color: slate
-
-## 🔧 Scripts
-
-### Root Scripts
-
-- `npm run dev` - Start Next.js development server
-- `npm run build` - Build Next.js app for production
-- `npm run start` - Start Next.js production server
-- `npm run lint` - Run ESLint
-- `npm run server:dev` - Start Express development server
-- `npm run build:server` - Build Express server
-- `npm run build:all` - Build both Next.js app and server
-
-### Server Scripts
-
-- `npm run dev` - Start server with tsx (hot reload)
-- `npm run build` - Compile TypeScript to JavaScript
-- `npm run start` - Start compiled server
-- `npm run typecheck` - Type check without building
-
-## 📚 Locations
-
-- **Global styles**: `src/app/globals.css`
-- **UI primitives**: `src/components/ui`
-- **DataTable**: `src/components/tables`
-- **Utils**: `src/lib/utils.ts`
-- **Server entry**: `backend/src/index.ts`
-
-## 🎨 Customizing Themes
-
-The TweakCN palette section in `globals.css` is marked as "SAFE TO OVERWRITE". You can:
-
-1. Go to [TweakCN Editor](https://tweakcn.com/editor/theme)
-2. Customize your theme
-3. Copy the generated CSS variables
-4. Paste over the `:root` and `.dark` blocks in `globals.css`
-
-The template preserves:
-- DataTable styles
-- p9 table variables
-- Layout helpers
-- Modal overlay styles
-
-## 🔐 Authentication
-
-The server includes JWT authentication boilerplate. To implement full authentication:
-
-1. Add user database/models
-2. Implement password hashing (bcryptjs is included)
-3. Add login validation logic
-4. Create auth middleware for protected routes
-5. Add refresh token support if needed
-
-## 📦 Dependencies
-
-### Frontend
-- Next.js 16+ (App Router)
-- React 19+
-- Tailwind CSS v4
-- TanStack Table (React Table)
-- Radix UI primitives
-- Lucide React icons
-- class-variance-authority
-- clsx & tailwind-merge
-
-### Backend
-- Express
-- TypeScript
-- jsonwebtoken
-- bcryptjs
-- cors
-- cookie-parser
-- dotenv
-- mssql (database client)
-
-## 🚢 Deployment
-
-### Next.js
-
-The app can be deployed to Vercel, Netlify, or any Node.js hosting:
+Run these after changes:
 
 ```bash
+npm run lint
+npm run typecheck
 npm run build
-npm run start
 ```
 
-### Express Server
+## Desktop Behavior
 
-Build and run:
+- Closing the main window should minimize to tray unless the user explicitly quits.
+- The app should support Windows startup registration from settings.
+- Local dictionary data should remain available offline.
+- Sync jobs should be retryable and auditable.
 
-```bash
-cd backend
-npm run build
-npm run start
-```
+## Notes
 
-For production, consider:
-- Using PM2 or similar process manager
-- Setting up proper environment variables
-- Configuring CORS for your domain
-- Using a reverse proxy (nginx, etc.)
-
-## 📄 License
-
-MIT
-
-## 🤝 Contributing
-
-This is a template repository. Feel free to fork and customize for your needs!
+- The backend currently uses local in-memory and file-backed persistence paths for development.
+- Cloud PostgreSQL sync is expected to be introduced behind backend service boundaries, not directly from renderer code.
+- Installer and upgrade packaging should preserve user settings, local storage, and environment files.
